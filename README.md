@@ -8,6 +8,7 @@
 </p>
 
 <h1 align="center">🕵️ Event-Analyzer</h1>
+<img width="1536" height="795" alt="Dashboard" src="https://github.com/user-attachments/assets/59734bdf-992b-47dd-98d3-1d12d2e55806" />
 <p align="center"><b>A fast, analyst-first Windows EVTX viewer with built-in IOC extraction, Sigma rule matching, and MITRE ATT&CK mapping.</b></p>
 <p align="center">
   <i>Upload, filter, search, bookmark, annotate, and export — all in a responsive single-page interface.</i>
