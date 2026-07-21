@@ -1,0 +1,70 @@
+            </table>
+          </div>
+          <div class="empty" v-else>No raw data available.</div>
+        </section>
+      </div>
+    </div>
+
+    <div class="toast-container">
+      <div v-for="t in toasts" :key="t.id" class="toast" :class="'toast-' + t.type">{{ t.message }}</div>
+    </div>
+    <div class="modal-overlay" v-if="sigmaDetail" @click.self="closeSigmaDetail">
+      <div class="modal sigma-modal card" role="dialog" aria-modal="true" aria-label="Sigma Rule Detail">
+        <div class="modal-header">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <template v-if="sigmaDetail.rule">
+              <span class="signal-chip" :class="'signal-' + (sigmaDetail.rule.level === 'critical' || sigmaDetail.rule.level === 'high' ? 'danger' : sigmaDetail.rule.level === 'medium' ? 'warning' : 'info')">{{ sigmaDetail.rule.level }}</span>
+              <div class="modal-title">{{ sigmaDetail.rule.rule_title }}</div>
+              <span class="raw-field-value" style="font-size:11px;color:var(--text-dim)">{{ sigmaDetail.rule.rule_id }}</span>
+            </template>
+            <template v-else>
+              <div class="modal-title">Rule Detail</div>
+            </template>
+          </div>
+          <button class="icon-button" type="button" title="Close" aria-label="Close sigma detail" @click="closeSigmaDetail">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 6 6 18" /><path d="M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px" v-if="sigmaDetail.rule">
+            <span class="detail-header-chip" v-for="mt in (sigmaDetail.rule.mitre_techniques || [])" :key="mt.id">
+              <span>{{ mt.id }}</span>
+              <strong>{{ mt.name }}</strong>
+            </span>
+          </div>
+          <p style="color:var(--text-3);font-size:14px;margin-bottom:14px;line-height:1.5" v-if="sigmaDetail.rule && sigmaDetail.rule.description">{{ sigmaDetail.rule.description }}</p>
+          <div class="raw-table-section" style="max-height:50vh;overflow:auto">
+            <div class="raw-table-header">
+              <div>
+                <div class="raw-table-title">Matching Events ({{ sigmaDetail.events.length }})</div>
+              </div>
+            </div>
+            <div class="raw-table-wrap" v-if="sigmaDetail.events.length">
+              <table class="raw-table">
+                <colgroup><col style="width:60px" /><col style="width:auto" /><col style="width:auto" /><col style="width:auto" /><col style="width:auto" /></colgroup>
+                <thead><tr><th>#</th><th>Timestamp</th><th>Computer</th><th>User</th><th>Description</th></tr></thead>
+                <tbody>
+                  <tr v-for="(sev, si) in sigmaDetail.events" :key="si" style="cursor:pointer" @click="jumpToEvent(sev)">
+                    <td class="cell-muted">{{ sev.event_number || si+1 }}</td>
+                    <td class="cell-time">{{ formatTime(sev.timestamp) }}</td>
+                    <td>{{ sev.hostname || sev.computer || '-' }}</td>
+                    <td>{{ sev.user_name || '-' }}</td>
+                    <td class="raw-field-value" style="font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ sev.event_desc }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="empty" v-else>No matching events found.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endraw %}
+
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="/static/app.js?v=v8"></script>
+</body>
+</html>

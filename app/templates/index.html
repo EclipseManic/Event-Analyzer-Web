@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Event-Analyzer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="icon" type="image/png" href="/static/logo.png" />
+  <link rel="stylesheet" href="/static/styles.css?v=v9" />
+  <script>
+    window.__APP_CONFIG__ = { pageLimit: {{ page_limit }} };
+  </script>
+</head>
+<body>
+  {% raw %}
+  <div id="app" class="page" :class="{ 'detail-open': eventDetail }" :style="eventDetail ? { '--detail-offset': detailHeight + 'px' } : {}">
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="brand-block">
+          <img src="/static/logo.png" alt="Event-Analyzer" class="brand-logo" />
+          <div class="brand">Event-Analyzer</div>
+        </div>
+        <nav class="tabs" aria-label="Primary">
+          <button class="tab-button" type="button" :class="{ active: activeTab === 'overview' }" @click="setTab('overview')">
+            <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6h16" />
+              <path d="M4 12h16" />
+              <path d="M4 18h16" />
+            </svg>
+            Overview
+          </button>
+          <button class="tab-button" type="button" :class="{ active: activeTab === 'investigation' }" @click="setTab('investigation')">
+            <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M10 6h10" />
+              <path d="M10 12h10" />
+              <path d="M10 18h10" />
+              <path d="M4 6h.01" />
+              <path d="M4 12h.01" />
+              <path d="M4 18h.01" />
+            </svg>
+            Investigation
+          </button>
+        </nav>
+      </div>
+      <div class="topbar-center" v-show="activeTab === 'investigation'">
+        <nav class="tabs subtabs" aria-label="Investigation">
+          <button class="tab-button sub" type="button" :class="{ active: activeSubTab === 'events' }" @click="setSubTab('events')">Events</button>
+          <button class="tab-button sub" type="button" :class="{ active: activeSubTab === 'iocs' }" @click="setSubTab('iocs')">IOCs</button>
+          <button class="tab-button sub" type="button" :class="{ active: activeSubTab === 'sigma' }" @click="setSubTab('sigma')">Sigma</button>
+          <button class="tab-button sub" type="button" :class="{ active: activeSubTab === 'notes' }" @click="setSubTab('notes')">Notes</button>
+        </nav>
+      </div>
+      <div class="topbar-right">
+        <div class="investigation-switch" v-if="activeTab === 'investigation'">
+          <button class="secondary upload-open" type="button" @click="openUploadModal">Upload</button>
+          <select v-model="selectedId" @change="selectInvestigation(selectedId)" :disabled="!investigations.length">
+            <option v-if="!investigations.length" value="">No investigations</option>
+            <option v-for="inv in investigations" :key="inv.id" :value="inv.id">{{ inv.name }}</option>
+          </select>
+          <button class="secondary upload-open" type="button" @click="exportReport" :disabled="!selectedId">Report</button>
+          <button class="icon-button danger" type="button" title="Delete investigation" aria-label="Delete selected investigation" @click="deleteSelectedInvestigation" :disabled="!selectedId">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 6h18" />
+              <path d="M8 6V4h8v2" />
+              <path d="M10 11v6" />
+              <path d="M14 11v6" />
+              <path d="M6 6l1 15h10l1-15" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <div class="modal-overlay" v-if="upload.modalOpen" @click.self.prevent>
+      <div class="modal card" role="dialog" aria-modal="true" aria-label="Upload EVTX">
+        <div class="modal-header">
+          <div>
+            <div class="modal-title">Upload EVTX</div>
+            <div class="modal-subtitle">Upload one or more .evtx files and wait for analysis to complete.</div>
+          </div>
+          <button class="icon-button" type="button" title="Close" aria-label="Close upload" @click="closeUploadModal" :disabled="upload.locked">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 6 6 18" />
+              <path d="M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="modal-body">
+          <div class="upload-modal-grid">
+            <input type="text" v-model="upload.name" placeholder="Investigation name (optional)" :disabled="upload.locked || uploading" />
+            <div class="upload-pickers">
+              <div class="file-control">
+                <input ref="evtxFileInput" id="evtx-files" class="file-input" type="file" multiple accept=".evtx" @change="onFileChange" :disabled="upload.locked || uploading" />
+                <label class="file-picker" for="evtx-files">Add files</label>
+                <span class="file-name">{{ upload.files.length ? upload.files.length + ' files selected' : 'No files selected' }}</span>
+              </div>
+              <div class="file-control">
+                <input ref="evtxFolderInput" id="evtx-folders" class="file-input" type="file" webkitdirectory directory multiple @change="onFolderChange" :disabled="upload.locked || uploading" />
+                <label class="file-picker" for="evtx-folders">Add folders</label>
+                <span class="file-name">{{ upload.folderNames.length ? upload.folderNames.length + ' folder(s) added' : 'No folders added' }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="upload-meta">
+
+            <div v-if="upload.startedAt">Elapsed: {{ formatDuration(upload.elapsedMs) }}</div>
+            <div v-if="upload.progress > 0 && upload.progress < 100">Upload: {{ upload.progress }}%</div>
+            <div v-if="upload.analysis.stage">Analysis: {{ upload.analysis.stage }} - {{ upload.analysis.percent }}%</div>
+            <div class="meta-detail" v-if="upload.analysis.detail">{{ upload.analysis.detail }}</div>
+            <div class="error" v-if="upload.error">{{ upload.error }}</div>
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button class="primary" v-if="!upload.invId" @click="uploadFiles" :disabled="upload.files.length === 0 || uploading">
+            {{ uploading ? 'Uploading...' : 'Upload & Analyze' }}
+          </button>
+          <button class="primary" v-else disabled>
+            {{ upload.done ? 'Complete' : 'Analyzing...' }}
+          </button>
+          <button class="secondary" v-if="upload.done" @click="viewUploadedInvestigation">View Dashboard</button>
+        </div>
+
+        <div class="modal-hint" v-if="upload.locked">Please wait until analysis reaches 100%.</div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" v-if="sigmaDetail || sigmaDetailLoading || sigmaError" @click.self="closeSigmaDetail">
+      <div class="modal card" role="dialog" aria-modal="true" aria-label="Sigma Rule Detail">
+        <div class="modal-header">
+          <div>
+            <div class="modal-title">{{ sigmaDetail?.rule?.rule_title || 'Sigma Rule' }}</div>
+            <div class="modal-subtitle" v-if="sigmaDetail?.rule?.rule_id" style="font-family:var(--mono);font-size:12px">{{ sigmaDetail.rule.rule_id }}</div>
+          </div>
+          <button class="icon-button" type="button" title="Close" aria-label="Close sigma detail" @click="closeSigmaDetail">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 6 6 18" />
+              <path d="M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="loading-dots" v-if="sigmaDetailLoading">
+            <span></span><span></span><span></span>
+          </div>
+          <div class="error" v-else-if="sigmaError" style="padding:10px 0;font-size:13px">{{ sigmaError }}</div>
+          <template v-else-if="sigmaDetail">
+            <p v-if="sigmaDetail.rule?.description" class="sigma-rule-desc" style="margin:0 0 10px">{{ sigmaDetail.rule.description }}</p>
+            <template v-if="sigmaSelectedEvent">
+              <template v-if="sigmaSelectedEvent.event_number || sigmaSelectedEvent.event_id">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+                  <button class="ghost" style="font-size:12px;padding:3px 10px" @click="closeSigmaEvent">&larr; Back to events</button>
+                  <span style="font-size:13px;font-weight:600;color:var(--pri)">Event #{{ sigmaSelectedEvent.event_number || sigmaSelectedEvent.event_id }}</span>
+                </div>
+                <div class="sigma-modal-table-scroll">
+                  <table class="sigma-events-table">
+                    <colgroup><col style="width:28%" /><col style="width:72%" /></colgroup>
+                    <thead><tr><th>Field</th><th>Value</th></tr></thead>
+                    <tbody>
+                      <template v-for="(v, k) in sigmaSelectedEvent" :key="k">
+                        <tr v-if="!['id','investigation_id','raw_data','raw_xml','mitre_techniques'].includes(k) && v !== null && v !== undefined && v !== ''">
+                          <td style="color:var(--text-3);font-family:var(--mono);font-size:12px;white-space:nowrap">{{ k }}</td>
+                          <td style="font-size:13px;word-break:break-word">{{ typeof v === 'object' ? JSON.stringify(v) : String(v) }}</td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </template>
+              <div class="loading-dots" v-else>
+                <span></span><span></span><span></span>
+              </div>
+            </template>
+            <template v-else>
+              <div class="sigma-events-toolbar" style="margin-bottom:8px">
+                <span>Matching Events ({{ sigmaDetail.events.length }})</span>
+              </div>
+              <div class="sigma-modal-table-scroll">
+                <table class="sigma-events-table">
+                  <colgroup><col style="width:8%" /><col style="width:20%" /><col style="width:16%" /><col style="width:16%" /><col style="width:40%" /></colgroup>
+                  <thead><tr><th>EID</th><th>Time</th><th>Computer</th><th>User</th><th>Description</th></tr></thead>
+                  <tbody>
+                    <tr v-for="(ev, si) in sigmaDetail.events" :key="si" style="cursor:pointer" @click="viewSigmaEvent(ev)">
+                      <td><span class="event-id-chip">{{ ev.eid || ev.event_id }}</span></td>
+                      <td class="cell-time">{{ formatTime(ev.timestamp) }}</td>
+                      <td>{{ ev.hostname || ev.computer || '-' }}</td>
+                      <td>{{ ev.user_name || '-' }}</td>
+                      <td class="sigma-event-desc">{{ ev.event_desc || ev.description }}</td>
+                    </tr>
+                    <tr v-if="!sigmaDetail.events.length"><td colspan="5" class="empty">No matching events.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </template>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <section class="overview" v-if="activeTab === 'overview'">
+      <div class="hero">
+        <div class="hero-grid-bg" aria-hidden="true"></div>
+        <div class="hero-radial" aria-hidden="true"></div>
+        <div class="hero-content">
+          <div class="hero-badge">
+            <span class="pulse-ring"></span>
+            EVTX Investigation Viewer
+          </div>
+          <h1>Upload. Parse.<br><span class="hero-accent">Investigate.</span></h1>
+          <p class="hero-desc">
+            Upload Windows .evtx files, parse them with a Rust backend, and search everything in a local SQLite index.
+            Analysts get details, freshers get structure, leaders get exports.
+          </p>
+          <div class="hero-actions">
+            <button class="btn-glow" type="button" @click="startInvestigation">
+              <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/></svg>
+              Start Investigation
+            </button>
+            <button class="btn-outline" type="button" v-if="investigations.length" @click="setTab('investigation')">Open Existing</button>
+          </div>
+        </div>
+        <div class="hero-terminal">
+          <div class="term-chrome">
+            <span class="term-dot r"></span><span class="term-dot y"></span><span class="term-dot g"></span>
+            <span class="term-title">events.json</span>
+          </div>
+          <div class="term-body">
+            <div class="term-line"><span class="t-key">"timestamp"</span>: <span class="t-str">"2025-11-03T14:22:18"</span>,</div>
+            <div class="term-line"><span class="t-key">"event_id"</span>: <span class="t-num">4688</span>,</div>
+            <div class="term-line"><span class="t-key">"provider"</span>: <span class="t-str">"Microsoft-Windows-Security-Auditing"</span>,</div>
+            <div class="term-line"><span class="t-key">"channel"</span>: <span class="t-str">"Security"</span>,</div>
+            <div class="term-line"><span class="t-key">"computer"</span>: <span class="t-str">"DC-01"</span>,</div>
+            <div class="term-line"><span class="t-key">"user"</span>: <span class="t-str">"CORP\\jdoe"</span>,</div>
+            <div class="term-line"><span class="t-key">"description"</span>: <span class="t-str">"A new process has been created."</span></div>
+            <div class="term-cursor"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="stats-bar">
+        <div class="stat-item"><span class="stat-num">Rust</span><span class="stat-label">Parser backend</span></div>
+        <div class="stat-divider"></div>
+        <div class="stat-item"><span class="stat-num">SQLite</span><span class="stat-label">Searchable index</span></div>
+        <div class="stat-divider"></div>
+        <div class="stat-item"><span class="stat-num">CSV</span><span class="stat-label">Export format</span></div>
+        <div class="stat-divider"></div>
+        <div class="stat-item"><span class="stat-num">JSON</span><span class="stat-label">Export format</span></div>
+      </div>
+
+      <section class="features-section">
+        <div class="section-header">
+          <span class="section-tag">Workflow</span>
+          <h2>Four steps from log to insight</h2>
+          <p>Every investigation runs through a consistent pipeline — from upload to actionable report.</p>
+        </div>
+        <div class="feature-grid">
+          <div class="feature-card" style="--card-accent: #38bdf8">
+            <div class="fc-icon" style="background: rgba(56,189,248,.12)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2v9l-6-6z"/><path d="M14 2v6h6"/></svg>
+            </div>
+            <h3>Bring in evidence</h3>
+            <p>Upload .evtx files or entire folders. All sources are grouped under a single investigation automatically.</p>
+            <div class="fc-tags"><span>.evtx</span><span>folder</span><span>multi-file</span></div>
+          </div>
+          <div class="feature-card" style="--card-accent: #0ea5e9">
+            <div class="fc-icon" style="background: rgba(14,165,233,.12)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#0ea5e9" stroke-width="2" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            </div>
+            <h3>Convert to usable view</h3>
+            <p>Logs are parsed with the Rust EVTX backend and written into a local SQLite index for search.</p>
+            <div class="fc-tags"><span>rust backend</span><span>sqlite</span><span>indexed</span></div>
+          </div>
+          <div class="feature-card" style="--card-accent: #22d3ee">
+            <div class="fc-icon" style="background: rgba(34,211,238,.12)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+            </div>
+            <h3>Analyst review</h3>
+            <p>Search by text, filter by Event ID, channel, user, host, source file, and time range.</p>
+            <div class="fc-tags"><span>search</span><span>filters</span><span>time range</span></div>
+          </div>
+          <div class="feature-card" style="--card-accent: #06b6d4">
+            <div class="fc-icon" style="background: rgba(6,182,212,.12)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#06b6d4" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </div>
+            <h3>Share and report</h3>
+            <p>Export results to CSV or JSON for reports, handoffs, and documentation.</p>
+            <div class="fc-tags"><span>CSV</span><span>JSON</span><span>export</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="workflow-section">
+        <div class="section-header">
+          <span class="section-tag">Pipeline</span>
+          <h2>From raw logs to actionable results</h2>
+        </div>
+        <div class="workflow-timeline">
+          <div class="wf-step">
+            <div class="wf-num">01</div>
+            <div class="wf-content">
+              <h4>Upload</h4>
+              <p>Drag-drop .evtx files or folders into the investigation.</p>
+            </div>
+          </div>
+          <div class="wf-connector"></div>
+          <div class="wf-step">
+            <div class="wf-num">02</div>
+            <div class="wf-content">
+              <h4>Parse</h4>
+              <p>Rust EVTX parser extracts every event into a searchable SQLite index.</p>
+            </div>
+          </div>
+          <div class="wf-connector"></div>
+          <div class="wf-step">
+            <div class="wf-num">03</div>
+            <div class="wf-content">
+              <h4>Investigate</h4>
+              <p>Search, filter, and review events with full raw data and detail views.</p>
+            </div>
+          </div>
+          <div class="wf-connector"></div>
+          <div class="wf-step">
+            <div class="wf-num">04</div>
+            <div class="wf-content">
+              <h4>Export</h4>
+              <p>Download CSV or JSON for SIEM ingestion and incident documentation.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <nav class="breadcrumb" v-if="activeTab === 'investigation' && navStack.length">
+      <span class="breadcrumb-item" @click="navTo(0)">Investigation</span>
+      <template v-for="(n, i) in navStack" :key="i">
+        <span class="breadcrumb-sep">/</span>
+        <span class="breadcrumb-item" :class="{ active: i === navStack.length - 1 }" @click="navTo(i + 1)">{{ n.label }}</span>
+      </template>
+    </nav>
+    <section class="main-grid" v-if="activeTab === 'investigation'">
+      <div class="ingest-bar" v-if="progress.stage && progress.stage !== 'complete' && progress.stage !== 'complete_with_errors'">
+        <div class="ingest-label">{{ progress.stage }} — {{ Math.round(progress.percent) }}%</div>
+        <div class="ingest-track"><div class="ingest-fill" :style="{ width: progress.percent + '%' }"></div></div>
+      </div>
+      <section class="content" v-if="activeSubTab === 'events'">
+        <div class="card filters-card" v-show="selectedId">
+          <div class="card-title">Filters</div>
+          <div class="filters">
+            <input v-model="filters.search" placeholder="Search text" ref="searchInput" aria-label="Search text" @keydown.enter="applyFilters" />
+            <input v-model="filters.event_id" placeholder="Event ID" aria-label="Event ID filter" @keydown.enter="applyFilters" />
+            <select v-model="filters.channel" aria-label="Filter by channel" @keydown="onSelectKeydown('channel', $event)">
+              <option value="">All channels</option>
+              <option v-for="c in channels" :key="c" :value="c">{{ c }}</option>
+            </select>
+            <input v-model="filters.process_name" placeholder="Process name" aria-label="Filter by process name" @keydown.enter="applyFilters" />
+            <input v-model="filters.command_line" placeholder="Command line" aria-label="Filter by command line" @keydown.enter="applyFilters" />
+            <input v-model="filters.user_name" placeholder="User name" aria-label="Filter by user name" @keydown.enter="applyFilters" />
+            <input v-model="filters.hostname" placeholder="Hostname" aria-label="Filter by hostname" @keydown.enter="applyFilters" />
+            <select v-model="filters.source_file" aria-label="Filter by source file" @keydown="onSelectKeydown('source_file', $event)">
+              <option value="">All files</option>
+              <option v-for="f in sourceFiles" :key="f" :value="f">{{ f }}</option>
+            </select>
+            <input v-model="filters.start_time" placeholder="Start (YYYY-MM-DD HH:MM:SS)" aria-label="Start time" @keydown.enter="applyFilters" />
+            <input v-model="filters.end_time" placeholder="End (YYYY-MM-DD HH:MM:SS)" aria-label="End time" @keydown.enter="applyFilters" />
+            <select v-model="sort">
+              <option value="asc">Oldest first</option>
+              <option value="desc">Newest first</option>
+            </select>
+            <button class="secondary" @click="applyFilters" :disabled="!selectedId">Apply</button>
+            <button class="ghost" @click="resetFilters" :disabled="!selectedId">Reset</button>
+          </div>
+        </div>
+        <div class="active-filters" v-if="activeFilterList.length">
+          <span class="active-filters-label">Filters:</span>
+          <span class="filter-chip active" v-for="f in activeFilterList" :key="f.key" @click="removeFilter(f.key)" style="cursor:pointer">{{ f.label }}: {{ f.value }} <span style="margin-left:4px;opacity:.6">&times;</span></span>
+          <button class="ghost" style="padding:2px 8px;font-size:11px;margin-left:auto" @click="resetFilters">Clear all</button>
+        </div>
+
+          <div class="card events-card">
+          <div class="card-title">Events</div>
+          <div class="table-meta" v-if="selectedId">
+            <div class="metric">Total: <strong>{{ totalEvents }}</strong></div>
+            <div class="actions">
+              <span class="metric" v-if="bookmarkedIds.length">Bookmarks: <strong>{{ bookmarkedIds.length }}</strong></span>
+              <button class="ghost" @click="exportEvents('csv')" :disabled="!selectedId || totalEvents === 0">Export CSV</button>
+              <button class="ghost" @click="exportEvents('json')" :disabled="!selectedId || totalEvents === 0">Export JSON</button>
+            </div>
+          </div>
+          <div class="table-wrap" v-if="selectedId && loadingEvents">
+            <table>
+              <colgroup><col class="col-sno" /><col class="col-time" /><col class="col-eid" /><col class="col-computer" /><col class="col-user" /><col class="col-summary" /></colgroup>
+              <thead><tr><th>S.No</th><th>Time</th><th>Event ID</th><th>Computer</th><th>User</th><th>Summary</th></tr></thead>
+              <tbody class="loading-skeleton">
+                <tr v-for="n in 6" :key="'skel-'+n"><td><span style="width:30px"></span></td><td><span style="width:120px"></span></td><td><span style="width:40px"></span></td><td><span style="width:80px"></span></td><td><span style="width:50px"></span></td><td><span style="width:220px"></span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="table-wrap" v-else-if="selectedId && events.length">
+            <table>
+              <colgroup>
+                <col class="col-sno" />
+                <col class="col-time" />
+                <col class="col-eid" />
+                <col class="col-computer" />
+                <col class="col-user" />
+                <col class="col-summary" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>S.No</th>
+                  <th>Time</th>
+                  <th>Event ID</th>
+                  <th>Computer</th>
+                  <th>User</th>
+                  <th>Summary</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(evt, index) in events"
+                    :key="evt.id"
+                    :class="{ selected: evt.id === selectedEventId }"
+                    @click="toggleEvent(evt, index)">
+                  <td class="cell-muted event-number-cell">
+                    <span class="bookmark-star" :class="{ active: isBookmarked(evt.id) }" @click.stop="toggleBookmark(evt.id)">&#9733;</span>
+                    <span class="event-num-text">{{ rowNumber(index) }}</span>
+                  </td>
+                  <td class="cell-time" :title="relativeTime(evt.timestamp)">{{ formatTime(evt.timestamp) }}</td>
+                  <td><span class="event-id-chip">{{ evt.event_id }}</span></td>
+                  <td><span class="cell-clamp">{{ evt.hostname || evt.computer }}</span></td>
+                  <td><span class="cell-clamp">{{ evt.user_name || '-' }}</span></td>
+                  <td><div class="summary" :class="{ 'summary-expanded': expandedSummary === evt.id }" @click.stop="toggleSummary(evt.id)">{{ evt.description }}</div></td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="pager">
+              <button class="ghost" @click="prevPage" :disabled="page <= 1">Prev</button>
+              <div>Page {{ page }} of {{ totalPages }}</div>
+              <button class="ghost" @click="nextPage" :disabled="page >= totalPages">Next</button>
+            </div>
+          </div>
+          <div class="empty" v-else-if="selectedId">No events found.</div>
+          <div class="empty" v-else>Select an investigation to view events.</div>
+        </div>
+      </section>
+
+      <section class="content" v-if="activeSubTab === 'iocs'">
+        <div class="card">
+          <div class="card-title">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <span>Extracted IOCs ({{ iocSummary.total || iocTotal }})</span>
+              <span style="margin-left:auto;display:flex;gap:6px" v-if="selectedId && (iocSummary.total || iocTotal)">
+                <button class="ghost" style="font-size:11px;padding:2px 10px" @click="exportIocs('csv')">CSV</button>
+                <button class="ghost" style="font-size:11px;padding:2px 10px" @click="exportIocs('json')">JSON</button>
+              </span>
+            </div>
+          </div>
+          <div class="filter-bar" v-show="selectedId && (iocSummary.total || iocTotal)">
+            <button class="ghost filter-chip" :class="{ active: !iocFilterType }" @click="filterIocByType('')">All ({{ iocSummary.total || iocTotal }})</button>
+            <button class="ghost filter-chip" v-for="(cnt, type) in iocSummary.types" :key="type" :class="{ active: iocFilterType === type }" @click="filterIocByType(type)">{{ type }} ({{ cnt }})</button>
+            <input v-model="iocSearch" placeholder="Search IOC values..." class="ioc-search" style="margin-left:auto;min-height:32px;padding:4px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--field);color:var(--text);font-size:13px;width:220px" />
+          </div>
+          <div class="loading-dots" v-if="selectedId && loadingIocs">
+            <span></span><span></span><span></span>
+          </div>
+          <div class="raw-table-wrap" v-else-if="selectedId && filteredIocs.length">
+            <table class="ioc-table">
+              <colgroup><col style="width:80px" /><col style="width:auto;min-width:160px" /><col style="width:75px" /><col style="width:55px" /><col style="width:auto;min-width:120px" /><col style="width:72px" /></colgroup>
+              <thead><tr><th>Type</th><th>Value</th><th>Source</th><th>Cnt</th><th>Context</th><th></th></tr></thead>
+              <tbody>
+                <tr v-for="ioc in filteredIocs" :key="ioc.id || ioc.value">
+                  <td><span class="ioc-type-badge" :style="iocTypeStyle(ioc.ioc_type)">{{ ioc.ioc_type }}</span></td>
+                  <td @click="copyText(ioc.value)" class="ioc-value-cell" :title="'Click to copy: ' + ioc.value">
+                    <span class="ioc-value-text">{{ ioc.value }}</span>
+                    <span class="ioc-copy-icon" title="Copy value">copy</span>
+                  </td>
+                  <td class="ioc-source-cell" :title="ioc.source || ''">{{ ioc.source || '-' }}</td>
+                  <td><span class="event-id-chip" :class="{ 'ioc-count-highlight': ioc.event_count > 1 }" @click="viewEventsForIoc(ioc)" style="cursor:pointer" :title="'Show ' + ioc.event_count + ' events'">{{ ioc.event_count }}</span></td>
+                  <td class="ioc-context-cell" :class="{ expanded: expandedIocId === (ioc.id || ioc.value) }" @click="toggleIocContext(ioc.id || ioc.value)">
+                    <span v-if="expandedIocId !== (ioc.id || ioc.value)" class="ioc-context-preview">{{ ioc.context ? truncate(ioc.context, 120) : '-' }}</span>
+                    <span v-else class="ioc-context-full">{{ ioc.context || '-' }}</span>
+                    <span v-if="ioc.context && ioc.context.length > 120" class="ioc-context-toggle">{{ expandedIocId === (ioc.id || ioc.value) ? '▲ less' : '▼ more' }}</span>
+                  </td>
+                  <td><button class="mini-button" @click.stop="viewEventsForIoc(ioc)" :title="'Show events with ' + ioc.value">Events</button></td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="pager" v-if="iocTotalPages > 1">
+              <button class="ghost" @click="prevIocPage" :disabled="iocPage <= 1">Prev</button>
+              <div>Page {{ iocPage }} of {{ iocTotalPages }}</div>
+              <button class="ghost" @click="nextIocPage" :disabled="iocPage >= iocTotalPages">Next</button>
+            </div>
+            <div class="empty" v-if="iocTotalPages <= 1 && iocs.length" style="padding:8px 20px;font-size:12px;color:var(--text-3);text-align:center">Showing all {{ iocs.length }} of {{ iocTotal }} IOCs.</div>
+          </div>
+          <div class="empty" v-else-if="selectedId && iocs.length && !filteredIocs.length">No IOCs match your search.</div>
+          <div class="empty" v-else-if="!selectedId">Select an investigation to view IOCs.</div>
+          <div class="empty" v-else>No IOCs extracted.</div>
+        </div>
+      </section>
+
+      <section class="content" v-if="activeSubTab === 'sigma'">
+        <div class="card">
+          <div class="card-title">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <span>Sigma Rule Matches ({{ sigmaTotal }})</span>
+              <span style="margin-left:auto;display:flex;gap:6px" v-if="selectedId && filteredSigma.length">
+                <button class="ghost" style="font-size:11px;padding:2px 10px" @click="exportSigma('csv')">CSV</button>
+                <button class="ghost" style="font-size:11px;padding:2px 10px" @click="exportSigma('json')">JSON</button>
+              </span>
+            </div>
+          </div>
+          <div class="filter-bar" v-show="selectedId && sigmaTotal">
+            <button class="ghost filter-chip" :class="{ active: !sigmaFilterLevel }" @click="filterSigmaByLevel('')">All ({{ sigmaTotal }})</button>
+            <button class="ghost filter-chip" v-for="(cnt, level) in sigmaSummary.levels" :key="level" :class="{ active: sigmaFilterLevel === level }" @click="filterSigmaByLevel(level)">{{ level }} ({{ cnt }})</button>
+            <input v-model="sigmaSearch" placeholder="Search rules, MITRE, description..." class="sigma-search" />
+          </div>
+          <div class="error" v-if="sigmaError" style="margin:12px;padding:10px 14px;border-radius:var(--radius);background:var(--red-dim);color:var(--red);font-size:13px;font-weight:600">{{ sigmaError }}</div>
+          <template v-else>
+          <div class="loading-dots" v-if="selectedId && loadingSigma">
+            <span></span><span></span><span></span>
+          </div>
+          <div class="raw-table-wrap" v-else-if="selectedId && filteredSigma.length">
+            <table class="sigma-table">
+              <colgroup><col style="width:10%" /><col style="width:36%" /><col style="width:7%" /><col style="width:27%" /><col style="width:20%" /></colgroup>
+              <thead><tr><th>Level</th><th>Rule</th><th>Cnt</th><th>Description</th><th>MITRE</th></tr></thead>
+              <tbody>
+                <template v-for="g in filteredSigma" :key="g.rule_id">
+                  <tr :class="'severity-row-' + (g.level === 'critical' || g.level === 'high' ? 'danger' : g.level === 'medium' ? 'warning' : 'info')" @click="openSigmaDetail(g)" style="cursor:pointer">
+                    <td><span class="signal-chip" :class="'signal-' + (g.level === 'critical' || g.level === 'high' ? 'danger' : g.level === 'medium' ? 'warning' : 'info')">{{ g.level }}</span></td>
+                    <td class="sigma-rule-cell"><span class="sigma-rule-title">{{ g.rule_title || g.rule_id }}</span><span class="sigma-rule-id">{{ g.rule_id }}</span></td>
+                    <td><span class="event-id-chip">{{ g.match_count }}</span></td>
+                    <td class="sigma-desc-cell" :title="g.description || ''"><span class="sigma-desc-text">{{ g.description ? truncate(g.description, 100) : '-' }}</span></td>
+                    <td class="sigma-mitre-cell">
+                      <span v-for="mt in (g.mitre_techniques || [])" :key="mt.id" class="mitre-chip" :title="mt.name || ''">{{ mt.id }}</span>
+                      <span v-if="!(g.mitre_techniques || []).length" style="font-size:11px;color:var(--text-3)">-</span>
+                    </td>
+                  </tr>
+
+                </template>
+              </tbody>
+            </table>
+            <div class="pager" v-if="sigmaTotalPages > 1">
+              <button class="ghost" @click="prevSigmaPage" :disabled="sigmaPage <= 1">Prev</button>
+              <div>Page {{ sigmaPage }} of {{ sigmaTotalPages }}</div>
+              <button class="ghost" @click="nextSigmaPage" :disabled="sigmaPage >= sigmaTotalPages">Next</button>
+            </div>
+          </div>
+          <div class="empty" v-else-if="selectedId && sigmaAlerts.length && !filteredSigma.length">No rules match your search.</div>
+          <div class="empty" v-else-if="!selectedId">Select an investigation to view Sigma matches.</div>
+          <div class="empty" v-else>No Sigma alerts triggered.</div>
+          </template>
+        </div>
+      </section>
+
+      <section class="content" v-if="activeSubTab === 'notes'">
+        <div class="card">
+          <div class="card-title">Investigation Notes</div>
+          <div v-if="selectedId">
+            <div class="loading-dots" v-if="loadingNotes">
+              <span></span><span></span><span></span>
+            </div>
+            <template v-else>
+              <div style="display:flex;gap:8px;margin-bottom:8px">
+                <button class="ghost" :class="{ active: !showNotePreview }" @click="showNotePreview = false" style="padding:4px 10px;font-size:12px">Edit</button>
+                <button class="ghost" :class="{ active: showNotePreview }" @click="showNotePreview = true" style="padding:4px 10px;font-size:12px">Preview</button>
+              </div>
+              <textarea v-if="!showNotePreview" v-model="noteContent" class="notes-textarea" placeholder="Write your investigation notes here..."></textarea>
+              <div v-else class="notes-preview" v-html="renderMarkdown(noteContent)"></div>
+              <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+                <span style="font-size:12px;color:var(--text-3)">{{ savingNote ? 'Saving...' : 'Auto-saved' }}</span>
+                <span v-if="noteContent !== (lastSavedNote ?? '')" style="font-size:12px;color:var(--amber)">Unsaved changes</span>
+              </div>
+            </template>
+          </div>
+          <div class="empty" v-else>Select an investigation to add notes.</div>
+        </div>
+      </section>
+    </section>
+
+    <div class="detail-bar" v-if="eventDetail" :style="{ height: detailHeight + 'px' }">
+      <div class="detail-handle" @mousedown="startResize"></div>
+      <div class="detail-header">
+        <div class="detail-heading">
+          <div class="detail-title">
+            Event Detail
+            <span class="bookmark-star detail-bookmark" :class="{ active: isBookmarked(eventDetail.id) }" @click.stop="toggleBookmark(eventDetail.id)">&#9733;</span>
+            <span class="detail-serial" v-if="selectedEventSerial">#{{ selectedEventSerial }}</span>
+          </div>
+          <div class="detail-header-meta">
+            <span class="detail-header-chip" v-for="item in detailHeaderItems" :key="'detail-header-' + item.key"
+              :class="{ 'chip-clickable': item.key === 'ioc' || item.key === 'sigma' }"
+              @click="item.key === 'ioc' ? setSubTab('iocs') : item.key === 'sigma' ? setSubTab('sigma') : null"
+              :title="item.key === 'ioc' ? 'View IOCs' : item.key === 'sigma' ? 'View Sigma matches' : ''">
+              <span>{{ item.label }}</span>
+              <strong v-html="highlightText(item.value)"></strong>
+            </span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:4px">
+          <button class="ghost" @click="closeEvent">Close</button>
+          <span style="font-size:10px;color:var(--text-3)">Esc</span>
+        </div>
+      </div>
+      <div class="detail-body">
+        <div class="detail-summary-grid">
+          <div class="detail-summary-item" v-for="item in detailSummaryItems" :key="'summary-' + item.key" :class="[{ wide: item.wide }, 'detail-summary-key-' + item.key]">
+            <span>{{ item.label }}</span>
+            <strong v-html="highlightText(item.value)"></strong>
+          </div>
+        </div>
+        <section class="raw-table-section">
+          <div class="raw-table-header">
+            <div>
+              <div class="raw-table-title">Raw Event Data</div>
+              <div class="raw-table-count">{{ rawFieldRows.length }} fields</div>
+            </div>
+            <button class="mini-button" type="button" @click="copyText(rawEventJson())">Copy JSON</button>
+          </div>
+          <div class="raw-table-wrap" v-if="rawFieldRows.length">
+            <table class="raw-table raw-table-pairs">
+              <colgroup>
+                <col class="raw-col-field" />
+                <col class="raw-col-value" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>Field</th>
+                  <th>Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template v-for="grp in groupedRawFields" :key="grp.category">
+                  <tr class="raw-group-header"><th colspan="2">{{ grp.category }}</th></tr>
+                  <tr v-for="row in grp.items" :key="row.id" :class="['raw-type-' + row.type, 'raw-category-' + row.category, { 'raw-empty-row': row.empty }]">
+                    <td class="raw-field-path">
+                      <span class="raw-category-chip">{{ row.category }}</span>
+                      <span class="raw-path-text" :title="row.path" v-html="highlightText(row.displayPath)"></span>
+                    </td>
+                    <td class="raw-field-value">
+                      <span :class="'raw-value raw-value-' + row.type" v-html="highlightText(row.displayValue)"></span>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+          <div class="empty" v-else>No raw data available.</div>
+        </section>
+      </div>
+    </div>
+
+    <div class="toast-container">
+      <div v-for="t in toasts" :key="t.id" class="toast" :class="'toast-' + t.type">{{ t.message }}</div>
+    </div>
+
+  </div>
+  {% endraw %}
+
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="/static/app.js?v=v17"></script>
+</body>
+</html>
